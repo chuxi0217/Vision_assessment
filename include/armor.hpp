@@ -12,10 +12,10 @@ enum Color
 {
   red,
   blue,
-  extinguish,
+  extinguish,//熄灭
   purple
 };
-const std::vector<std::string> COLORS = {"red", "blue", "extinguish", "purple"};
+const std::vector<std::string> COLORS = {"red", "blue", "extinguish", "purple"};//vector向量
 
 enum ArmorType
 {
@@ -31,9 +31,9 @@ enum ArmorName
   three,
   four,
   five,
-  sentry,
-  outpost,
-  base,
+  sentry,//哨兵
+  outpost,//前哨
+  base,//基地
   not_armor
 };
 const std::vector<std::string> ARMOR_NAMES = {"one",    "two",     "three", "four",     "five",

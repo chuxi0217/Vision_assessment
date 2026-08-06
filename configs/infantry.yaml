@@ -8,6 +8,7 @@ classify_model: assets/tiny_resnet.onnx
 yolov5_model_path: assets/0526.xml
 device: CPU
 min_confidence: 0.8
+threshold: 0.5
 use_traditional: false
 
 #####-----ROI-----#####
