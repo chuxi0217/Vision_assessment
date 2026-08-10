@@ -3,6 +3,7 @@
 
 #include "yolov5.hpp"
 #include "solver.hpp"
+#include "aimer.hpp"
 
 using namespace auto_aim;
 using namespace std;
@@ -19,6 +20,7 @@ int main(int argc, char** argv) {
 
   // 3. 初始化 Solver 类（用于 PnP 解算）
   Solver solver(config_path);
+  Aimer aimer;
 
   // 4. 打开视频
   cv::VideoCapture cap(video_path);
@@ -41,7 +43,7 @@ int main(int argc, char** argv) {
     for (auto & armor : armors) {
       // TODO: PnP 解算（solver 目前还是空的，所以距离显示为 0）
       solver.solve(armor);
-
+      aimer.update(armor);
       // 6. 在图像上画出装甲板的四个角
       //    points 里有 4 个点，按顺序连成四边形
       for (size_t i = 0; i < armor.points.size(); i++) {
@@ -59,13 +61,19 @@ int main(int argc, char** argv) {
       cv::putText(
         frame, text, armor.center,
         cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
+      // 新增：显示 yaw/pitch（角度制，方便人读）
+    double yaw_deg = aimer.yaw() * 180.0 / CV_PI;
+    double pitch_deg = aimer.pitch() * 180.0 / CV_PI;
+    std::string angle_text = cv::format("Y:%.1f P:%.1f", yaw_deg, pitch_deg);
+    cv::putText(frame, angle_text, cv::Point(armor.center.x, armor.center.y - 20),
+    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 0), 2);
     }
 
     // 8. 显示画面
     cv::imshow("Vision Assessment", frame);
 
     // 按 ESC 退出
-    if (cv::waitKey(1) == 27) {
+    if (cv::waitKey(30) == 27) {
       break;
     }
   }

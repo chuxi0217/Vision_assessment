@@ -5,10 +5,11 @@ enemy_color: "red"
 #####-----神经网络参数-----#####
 yolo_name: yolov5
 classify_model: assets/tiny_resnet.onnx
+yolo11_model_path: assets/yolo11.xml
+yolov8_model_path: assets/yolov8.xml
 yolov5_model_path: assets/0526.xml
-device: CPU
+device: GPU
 min_confidence: 0.8
-threshold: 0.5
 use_traditional: false
 
 #####-----ROI-----#####
@@ -20,11 +21,73 @@ roi:
 
 use_roi: false
 
+#####-----工业相机参数-----#####
+camera_name: "hikrobot"
+exposure_ms: 10
+gain: 16.9
+vid_pid: "2bdf:0001"
+need_rotation: true
+
+#####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 20 # degree
+min_confidence: 0.8
+
+#####-----云台参数-----#####
+com_port: "/dev/ttyACM0"
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 25
+outpost_max_temp_lost_count: 75
+
+#####-----aimer参数-----#####
+yaw_offset: 1.5 # degree
+pitch_offset: 0.5 # degree
+comming_angle: 55 # degree
+leaving_angle: -20 # degree
+left_yaw_offset: -1
+right_yaw_offset: -0.6
+decision_speed: 10 # rad/s
+high_speed_delay_time: 0.05 # s
+low_speed_delay_time: 0.06 # s
+max_armor_angle: 40 # degree
+defult_bullet_speed: 22 # m/s
+
+#####-----shooter参数-----#####
+first_tolerance: 5 # 近距离射击容差，degree
+second_tolerance: 2 # 远距离射击容差，degree
+judge_distance: 3 #距离判断阈值
+auto_fire: true # 是否由自瞄控制射击
+
+#####-----decider参数-----#####
+mode: 1
+
 #####-----工业相机标定参数-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0,  0, 0, 1]
-# 重投影误差: 0.0787px
-camera_matrix: [2365.2292710685488, 0, 717.84874030069716, 0, 2365.2595057507042, 507.10051676922996, 0, 0, 1]
-distort_coeffs: [-0.053032056252978271, 0.12304744809762919, -0.00083306525109508019, 0.00044012934474125322, 0]
+
+# 重投影误差: 0.0809px
+camera_matrix: [2378.8545652658004, 0, 698.36523393286166, 0, 2379.8790625616111, 530.440262246251, 0, 0, 1]
+distort_coeffs: [-0.057311796562146938, 0.16313959269938549, 0.00030187307568253248, 0.0011009664675485024, 0]
+
 # 相机同理想情况的偏角: yaw0.56 pitch1.05 roll0.41 degree
-R_camera2gimbal: [0, 0, 1, -1, 0, 0, 0, -1, 0]
-t_camera2gimbal: [0.16, 0.047, 0]
+R_camera2gimbal: [-0.012217000835247169, 0.000000000000000000, 0.999925369660451979, -0.999925369660451979, 0.000000000000000000, -0.012217000835247169, -0.000000000000000000, -1.000000000000000000, 0.000000000000000000]
+t_camera2gimbal: [0.09200311361242768, 0.00029879776924094162, 0.082202098951968537]
+
+#####-----planner-----#####
+fire_thresh: 0.01
+
+max_yaw_acc: 280000
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+
+max_pitch_acc: 280000
+Q_pitch: [9e6,0]
+R_pitch: [100]
