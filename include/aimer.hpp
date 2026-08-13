@@ -10,8 +10,8 @@ namespace auto_aim{
             double yaw_ = 0.0;
             double pitch_ = 0.0;
         public:
-            double yaw() const;
-            double pitch() const;
+            double yaw() const;//get_yaw
+            double pitch() const;//get_pitch
             void update(const Armor &armor);
     };
 }
