@@ -86,6 +86,12 @@ public:  // 【小白注释】public 表示“公共的”，这些成员可以�
    */
   void solve(Armor & armor) const;
 
+  // 以下 getter 供可视化模块把估计出的车体/装甲板三维位置投影回图像
+  const cv::Mat & cameraMatrix() const;
+  const cv::Mat & distortCoeffs() const;
+  Eigen::Matrix3d R_gimbal2camera() const;
+  Eigen::Vector3d t_gimbal2camera() const;
+
 private:  // 【小白注释】private 表示“私有的”，这些成员只能被类内部的函数访问
 
   cv::Mat camera_matrix_;    ///< 相机内参矩阵（3x3），包含 fx, fy, cx, cy

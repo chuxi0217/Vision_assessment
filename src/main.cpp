@@ -1,29 +1,124 @@
+#include <algorithm>
+#include <cmath>
 #include <iostream>
+#include <string>
+#include <vector>
+
 #include <opencv2/opencv.hpp>
 
-#include "yolov5.hpp"
 #include "solver.hpp"
-#include "aimer.hpp"
+#include "tracker.hpp"
+#include "yolov5.hpp"
 
 using namespace auto_aim;
 using namespace std;
 
-int main(int argc, char** argv) {
+/**
+ * @brief 把装甲板中心+法向量展开成四个 3D 角点（云台坐标系）
+ *
+ * @param center  装甲板中心在云台坐标系下的位置（m）
+ * @param normal  装甲板法向量（水平面内，指向车外/相机）
+ * @param is_big  是否为大装甲板，决定板宽
+ */
+static vector<Eigen::Vector3d> buildArmorCorners(
+  const Eigen::Vector3d & center, const Eigen::Vector3d & normal, bool is_big)
+{
+  double half_w = is_big ? (0.225 / 2.0) : (0.135 / 2.0);
+  double half_h = 0.055 / 2.0;
+
+  Eigen::Vector3d up(0.0, 0.0, 1.0);
+  Eigen::Vector3d side = normal.cross(up).normalized();
+
+  vector<Eigen::Vector3d> corners;
+  corners.push_back(center + half_w * side + half_h * up);
+  corners.push_back(center - half_w * side + half_h * up);
+  corners.push_back(center - half_w * side - half_h * up);
+  corners.push_back(center + half_w * side - half_h * up);
+  return corners;
+}
+
+/**
+ * @brief 将云台坐标系下的 3D 角点投影到图像 2D 坐标
+ *
+ * @param corners_gimbal 云台坐标系下的角点
+ * @param solver         用于获取相机内参和云台→相机外参
+ * @param img_size       图像尺寸，用于过滤越界点
+ * @return 成功投影到图像内的 2D 角点；若任意角点在相机后方或越界则返回空
+ */
+static vector<cv::Point> projectCornersToImage(
+  const vector<Eigen::Vector3d> & corners_gimbal, const Solver & solver,
+  const cv::Size & img_size)
+{
+  Eigen::Matrix3d R_g2c = solver.R_gimbal2camera();
+  Eigen::Vector3d t_g2c = solver.t_gimbal2camera();
+  cv::Mat K = solver.cameraMatrix();
+  double fx = K.at<double>(0, 0);
+  double fy = K.at<double>(1, 1);
+  double cx = K.at<double>(0, 2);
+  double cy = K.at<double>(1, 2);
+
+  vector<cv::Point> pts2d;
+  for (const auto & c : corners_gimbal) {
+    Eigen::Vector3d c_cam = R_g2c * c + t_g2c;
+    if (c_cam.z() <= 0.05) {
+      return {};  // 在相机后方或太近，整体不画
+    }
+    double u = c_cam.x() / c_cam.z();
+    double v = c_cam.y() / c_cam.z();
+    int x = static_cast<int>(fx * u + cx);
+    int y = static_cast<int>(fy * v + cy);
+    if (x < 0 || x >= img_size.width || y < 0 || y >= img_size.height) {
+      return {};  // 越界，整体不画，避免画出不完整的框
+    }
+    pts2d.emplace_back(x, y);
+  }
+  return pts2d;
+}
+
+/**
+ * @brief 在图像上绘制装甲板框
+ */
+static void drawArmorBox(
+  cv::Mat & img, const vector<cv::Point> & pts, const cv::Scalar & color)
+{
+  if (pts.size() != 4) return;
+  for (size_t i = 0; i < pts.size(); ++i) {
+    cv::circle(img, pts[i], 4, color, -1);
+    cv::line(img, pts[i], pts[(i + 1) % pts.size()], color, 2);
+  }
+}
+
+/** @brief 将 TrackState 输出为可读的字符串 */
+static string stateToString(TrackState s)
+{
+  switch (s) {
+    case TrackState::LOST:
+      return "LOST";
+    case TrackState::DETECTING:
+      return "DETECTING";
+    case TrackState::TRACKING:
+      return "TRACKING";
+    case TrackState::TEMP_LOST:
+      return "TEMP_LOST";
+  }
+  return "UNKNOWN";
+}
+
+int main(int argc, char ** argv)
+{
   // 1. 配置文件和视频路径
   string config_path = "configs/infantry.yaml";
   string video_path = "assets/infantry.avi";
-  std::deque<std::pair<double,double>> yaw_history;
-  const size_t History_Maxsize = 5;
-  // 2. 初始化 YOLOv5 类
-  //    第一个参数：yaml 配置文件路径
-  //    第二个参数：是否开启 yolo 自带的 debug 显示（这里关掉了，我们自己画）
+
+  // 2. 初始化检测器、PnP 解算器和 Tracker
   YOLOV5 yolo(config_path, false);
-
-  // 3. 初始化 Solver 类（用于 PnP 解算）
   Solver solver(config_path);
-  Aimer aimer;
 
-  // 4. 打开视频
+  // Tracker：状态机 + EKF，内部把装甲板观测转成整车底盘中心跟踪
+  Tracker tracker;
+  double t_last = -1.0;  // -1 表示还没有上一帧时间戳
+
+  // 3. 打开视频
   cv::VideoCapture cap(video_path);
   if (!cap.isOpened()) {
     cerr << "Failed to open video: " << video_path << endl;
@@ -37,83 +132,140 @@ int main(int argc, char** argv) {
 
   // 5. 逐帧处理
   while (true) {
-    if(!pause){
+    if (!pause) {
       hasFrame = cap.read(frame);
-      if(!hasFrame) break;
+      if (!hasFrame) break;
     }
     frame_count++;
 
     // 调用 YOLO 模型检测装甲板，返回一个装甲板列表
-    auto armors = yolo.detect(frame, frame_count);
+    auto armors_list = yolo.detect(frame, frame_count);
 
-    // 遍历每一个识别到的装甲板
-    for (auto & armor : armors) {
-      // TODO: PnP 解算（solver 目前还是空的，所以距离显示为 0）
+    // 修复 bug：先对所有装甲板做 PnP 解算，填充 3D 坐标/姿态/法向量
+    for (auto & armor : armors_list) {
       solver.solve(armor);
-      aimer.update(armor);
-      double yaw_now = aimer.yaw();
-      double t_now = (double)cv::getTickCount() / cv::getTickFrequency();
-      yaw_history.push_back({yaw_now , t_now});
-      if(yaw_history.size() > History_Maxsize) yaw_history.pop_front();
-      double yaw_predict = yaw_now;
-      if(yaw_history.size() >= 2){
-        double dy = yaw_history.back().first - yaw_history.front().first;
-        double dt = yaw_history.back().second - yaw_history.front().second;
-        if(dt > 0){
-          double v_yaw = dy / dt;
-          yaw_predict = yaw_now + v_yaw*0.1;
-        }
-      }
-      // 6. 在图像上画出装甲板的四个角
-      //    points 里有 4 个点，按顺序连成四边形
-      for (size_t i = 0; i < armor.points.size(); i++) {
-        cv::circle(frame, armor.points[i], 4, cv::Scalar(0, 255, 0), -1);
-        cv::line(
-          frame,
-          armor.points[i],
-          armor.points[(i + 1) % armor.points.size()],
-          cv::Scalar(0, 255, 0), 2);
-      }
-
-      // 7. 在装甲板中心显示距离（当前为 0，因为 PnP 没写）
-      double dist = armor.xyz_in_gimbal.norm();
-      string text = cv::format("%.2f m", dist);
-      cv::putText(
-        frame, text, armor.center,
-        cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
-      // 新增：显示 yaw/pitch（角度制，方便人读）
-    double yaw_deg = aimer.yaw() * 180.0 / CV_PI;
-    double pitch_deg = aimer.pitch() * 180.0 / CV_PI;
-    std::string angle_text = cv::format("Y:%.1f P:%.1f", yaw_deg, pitch_deg);
-    cv::putText(frame, angle_text,
-      cv::Point(armor.center.x, armor.center.y - 20),
-      cv::FONT_HERSHEY_SIMPLEX, 0.6,
-      cv::Scalar(255, 255, 0), 2);
-      // 白字：当前值
-      std::string text1 = cv::format("Y:%.1f", yaw_now * 180.0 / CV_PI);
-      cv::putText(frame, text1, cv::Point(10, 30), 
-            cv::FONT_HERSHEY_SIMPLEX, 0.7,
-            cv::Scalar(255, 255, 0), 2);
-
-      // 红字：预测值
-      std::string text2 = cv::format("Yp:%.1f", yaw_predict * 180.0 / CV_PI);
-      cv::putText(frame, text2, cv::Point(10, 60), 
-            cv::FONT_HERSHEY_SIMPLEX, 0.7,
-            cv::Scalar(0, 0, 255), 2);
     }
 
-    // 8. 显示画面
+    // Tracker 需要 vector，复制一份
+    std::vector<Armor> armors(armors_list.begin(), armors_list.end());
+
+    // 6. 计算帧间隔 dt
+    double t_now = static_cast<double>(cv::getTickCount()) / cv::getTickFrequency();
+    double dt = (t_last < 0.0) ? 0.0 : (t_now - t_last);
+    bool first_frame = (t_last < 0.0);
+    t_last = t_now;
+
+    // 过滤异常 dt，并把 dt 传给 Tracker 处理（内部负责第一帧重置、状态机切换）
+    if (!first_frame && (dt <= 0.0 || dt > 0.5)) {
+      cout << "[WARN] abnormal dt=" << dt << " s, skip predict" << endl;
+      dt = 0.0;
+    }
+    tracker.update(armors, dt);
+
+    // 7. 终端诊断：输出 Tracker 状态、底盘位置、速度
+    TrackState state = tracker.state();
+    Eigen::Vector3d pos = tracker.targetPosition();
+    Eigen::Vector3d vel = tracker.velocity();
+    cout << "frame=" << frame_count
+         << " state=" << stateToString(state)
+         << " pos=" << pos.transpose()
+         << " vel=" << vel.transpose()
+         << " |vel|=" << vel.norm() << endl;
+    if (std::abs(vel.x()) >= 5.0 || std::abs(vel.y()) >= 5.0 ||
+        std::abs(vel.z()) >= 5.0) {
+      cout << "[WARN] velocity exceeds 5 m/s" << endl;
+    }
+
+    // 8. 整车观测：根据底盘中心和车辆航向推算四个装甲板位置，并用绿框绘制
+    const Armor * tracked = tracker.trackedArmor();
+    if ((state == TrackState::TRACKING || state == TrackState::TEMP_LOST) && tracked != nullptr) {
+      Eigen::Vector3d chassis = tracker.targetPosition();
+      vector<Eigen::Vector3d> armor_centers = tracker.getArmorPositions();
+      bool is_big = (tracked->type == ArmorType::big);
+
+      for (size_t i = 0; i < armor_centers.size(); ++i) {
+        Eigen::Vector3d normal = (armor_centers[i] - chassis).normalized();
+        auto corners = buildArmorCorners(armor_centers[i], normal, is_big);
+        auto pts = projectCornersToImage(corners, solver, frame.size());
+        drawArmorBox(frame, pts, cv::Scalar(0, 255, 0));
+      }
+    }
+
+    // 9. 选择离相机最近的装甲板作为打击目标（红框）
+    const Armor * target_armor = nullptr;
+    if (!armors.empty()) {
+      target_armor = &*std::min_element(
+        armors.begin(), armors.end(), [](const Armor & a, const Armor & b) {
+          return a.xyz_in_gimbal.norm() < b.xyz_in_gimbal.norm();
+        });
+    }
+
+    // 10. 在 Tracker 稳定跟踪时，给最近装甲板画 0.5 s 预测红框
+    if (target_armor != nullptr && state != TrackState::LOST) {
+      Eigen::Vector3d chassis_now = tracker.targetPosition();
+      Eigen::Vector3d chassis_pred = tracker.predictPosition(0.5);
+
+      // 预测装甲板中心 = 预测底盘 + 当前装甲板相对于底盘的偏移
+      Eigen::Vector3d armor_pred = chassis_pred + (target_armor->xyz_in_gimbal - chassis_now);
+
+      Eigen::Vector3d normal = target_armor->normal_in_gimbal;
+      normal.z() = 0.0;
+      if (normal.norm() > 0.01) {
+        normal.normalize();
+      } else {
+        normal = (target_armor->xyz_in_gimbal - chassis_now).normalized();
+      }
+
+      bool is_big = (target_armor->type == ArmorType::big);
+      auto corners = buildArmorCorners(armor_pred, normal, is_big);
+      auto pts = projectCornersToImage(corners, solver, frame.size());
+
+      if (!pts.empty()) {
+        drawArmorBox(frame, pts, cv::Scalar(0, 0, 255));
+      } else {
+        cout << "[WARN] predicted red box outside image or behind camera" << endl;
+      }
+
+      // 11. 显示文字信息（用最近装甲板的距离和底盘角度）
+      double dist = target_armor->xyz_in_gimbal.norm();
+      cv::putText(
+        frame, cv::format("%.2f m", dist), target_armor->center,
+        cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
+
+      double yaw_now = std::atan2(chassis_now.y(), chassis_now.x());
+      double horizontal_now = std::sqrt(chassis_now.x() * chassis_now.x() + chassis_now.y() * chassis_now.y());
+      double pitch_now = std::atan2(chassis_now.z(), horizontal_now);
+      double yaw_deg = yaw_now * 180.0 / CV_PI;
+      double pitch_deg = pitch_now * 180.0 / CV_PI;
+      cv::putText(
+        frame, cv::format("Y:%.1f P:%.1f", yaw_deg, pitch_deg),
+        cv::Point(target_armor->center.x, target_armor->center.y - 20),
+        cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 0), 2);
+    }
+
+    cv::putText(
+      frame, cv::format("S:%s", stateToString(state).c_str()), cv::Point(10, 30),
+      cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 0), 2);
+    if (state != TrackState::LOST) {
+      Eigen::Vector3d pred_pos = tracker.predictPosition(0.5);
+      double yaw_pred = std::atan2(pred_pos.y(), pred_pos.x());
+      cv::putText(
+        frame, cv::format("Yp:%.1f", yaw_pred * 180.0 / CV_PI), cv::Point(10, 60),
+        cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+    }
+
+    // 12. 显示画面
     cv::imshow("Vision Assessment", frame);
 
-    // 按 ESC 退出
+    // 按 ESC 退出，空格暂停
     int key = cv::waitKey(30);
     if (key == 27) {
       break;
-    }
-    else if(key == 32){
+    } else if (key == 32) {
       pause = !pause;
     }
   }
+
   cap.release();
   cv::destroyAllWindows();
   return 0;

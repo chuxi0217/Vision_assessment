@@ -247,13 +247,21 @@ struct Armor
   // 三维空间信息（由 Solver 解算后填充）
   // 【小白注释】Eigen::Vector3d 是 Eigen 库里的三维向量，d 表示 double 类型
   // 它可以表示空间中的一个点（x, y, z）或者一个姿态角（yaw, pitch, roll）
-  Eigen::Vector3d xyz_in_gimbal;  ///< 在云台坐标系下的三维坐标，单位：m
-  Eigen::Vector3d xyz_in_world;   ///< 在世界坐标系下的三维坐标，单位：m
+  Eigen::Vector3d xyz_in_gimbal;        ///< 在云台坐标系下的三维坐标，单位：m
+  Eigen::Vector3d normal_in_gimbal;     ///< 装甲板在云台坐标系下的法向量（指向车外/指向相机），单位：无
+  Eigen::Vector3d xyz_in_world;         ///< 在世界坐标系下的三维坐标，单位：m
   Eigen::Vector3d ypr_in_gimbal;  ///< 在云台坐标系下的姿态角（yaw, pitch, roll），单位：rad
   Eigen::Vector3d ypr_in_world;   ///< 在世界坐标系下的姿态角，单位：rad
   Eigen::Vector3d ypd_in_world;   ///< 在世界坐标系下的球坐标（yaw, pitch, distance），单位：弧度/米
 
   double yaw_raw;  // rad
+
+  /**
+   * @brief 默认构造函数
+   *
+   * 供 Tracker 等模块作为占位对象使用，实际使用前会被真实检测结果赋值。
+   */
+  Armor() = default;
 
   /**
    * @brief 由左右灯条构造装甲板（传统视觉检测）
